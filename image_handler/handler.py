@@ -9,8 +9,9 @@ class Handler(object):
         self.url = url
         self.encrypted_url = self.encrypt_url()
 
-    def load_key():
-        return open("secret.key","rb").read()
+    @classmethod
+    def load_key(self):
+        return open("image_handler/secret.key","rb").read()
 
     def encrypt_url(self):
 

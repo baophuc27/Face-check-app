@@ -1,4 +1,4 @@
-from face_detector.detector import Detector
+# from face_detector.detector import Detector
 from imutils.video import VideoStream
 from flask import Response
 from flask import Flask
@@ -13,14 +13,15 @@ from datetime import datetime
 import numpy as np
 import requests
 from image_handler.handler import Handler
+
+
 outputFrame = None
-lock = threading.Lock()
 app = Flask(__name__)
 vs = VideoStream(src=0).start()
 time.sleep(2.0)
-detector = Detector()
+# detector = Detector()
 hostname = "http://0.0.0.0:5000/"
-
+FACE_DETECTOR_SERVER = "http://face-detector.azurewebsites.net/detect?img_url="
 
 # Google cloud storage to store image
 storage = Storage().storage
@@ -42,13 +43,12 @@ def detect_face(frame):
 
 
 def gen_image():
-    global vs, outputFrame, frame
+    global vs, frame
     while True:
         frame = vs.read()
         frame = cv2.flip(frame, 1)
-        outputFrame = detect_face(frame)
-        if outputFrame is not None:
-            (flag, encodedImage) = cv2.imencode(".jpg", outputFrame)
+        if frame is not None:
+            (flag, encodedImage) = cv2.imencode(".jpg", frame)
 
         if not flag:
             continue
@@ -59,29 +59,31 @@ def gen_image():
         )
 
 
-def gen_check():
-    global vs, outputFrame, frame
-    frame = vs.read()
-    flag = detector.reg_face(frame)
-    
 
 @app.route("/webcam")
 def webcam():
     return Response(gen_image(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 
-@app.route("/check")
-def check():
-    gen_check()
-    return render_template("index.html")
-
-
 def upload_image(frame):
+
     path = "user1/" + str(int(time.time()))
     (_, encodedImage) = cv2.imencode(".jpg", frame)
     storage.child(path).put(bytearray(encodedImage))
-    link = storage.child(path).get_url(None)
+    link = storage.child(path).get_url(None)  
     return link
+
+def get_embedding(url):
+    """
+    Encrypt the url and send to azure server
+    """
+    image_handler = Handler(url)
+    url=image_handler.get_url()
+    res=requests.post(FACE_DETECTOR_SERVER+str(url))
+    data=res.json()
+    emb=data["embedding"]
+    embedding=np.fromstring(emb[1:-1],dtype=float,sep=' ')
+    return embedding.reshape(512,1)
 
 
 @app.route("/download", methods=["POST"])
@@ -89,21 +91,35 @@ def download():
     storage.child("user1/image").download("image.jpg")
     return render_template("index.html")
 
+@app.route("/getfb")
+def getfb():
+    res= database.child('user').get()
+    users=[]
+    for user in res.each():
+        val=user.val()
+        embedding = val['embedding']
+        embedding=np.fromstring(embedding[1:-1],dtype='float',sep=' ').reshape(512,1)
+        users.append({"link":val["link"],"embedding":embedding,"time":val["time"]})
+
+    embeddings = [user["embedding"] for user in users]
+    indexes=np.argwhere(face_distance(embeddings,embedding) < 800)
+    for index in indexes:
+        print(users[index[0]]["embedding"].shape)
+    return render_template("index.html")
+
+def face_distance(face_encodings, face_to_compare):
+    if len(face_encodings) == 0:
+        return np.empty((0))
+    face_dist_value = np.linalg.norm(face_encodings - face_to_compare, axis=1)
+    return face_dist_value
 
 @app.route("/getdata")
 def get_data():
     link = upload_image(frame)
     now = datetime.now()
     timestamp = now.strftime("%d/%m/%Y %H:%M:%S")
-    embedding = np.asarray(detector.reg_face(frame))
-    embedding = str(embedding)
-    return jsonify(time=timestamp, link=link, embedding=embedding)
-
-
-@app.route("/test")
-def test():
-    return jsonify({"success": True})
-
+    embedding = get_embedding(link)
+    return jsonify(time=timestamp, link=link, embedding =str(embedding))
 
 @app.route("/detect", methods=["POST"])
 def detect():
@@ -115,3 +131,5 @@ def detect():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0")
+
+vs.stop()
