@@ -1,8 +1,5 @@
-# from face_detector.detector import Detector
 from imutils.video import VideoStream
-from flask import Response
-from flask import Flask
-from flask import render_template, jsonify, request
+from flask import render_template, jsonify, request, Flask , Response
 import threading
 import json
 import cv2
@@ -13,7 +10,7 @@ from datetime import datetime
 import numpy as np
 import requests
 from image_handler.handler import Handler
-
+from configs import configs
 
 outputFrame = None
 app = Flask(__name__)
@@ -73,18 +70,6 @@ def upload_image(frame):
     link = storage.child(path).get_url(None)  
     return link
 
-def get_embedding(url):
-    """
-    Encrypt the url and send to azure server
-    """
-    image_handler = Handler(url)
-    url=image_handler.get_url()
-    res=requests.post(FACE_DETECTOR_SERVER+str(url))
-    data=res.json()
-    emb=data["embedding"]
-    embedding=np.fromstring(emb[1:-1],dtype=float,sep=' ')
-    return embedding.reshape(512,1)
-
 
 @app.route("/download", methods=["POST"])
 def download():
@@ -95,23 +80,29 @@ def download():
 def getfb():
     res= database.child('user').get()
     users=[]
+    embeddings=[]
     for user in res.each():
         val=user.val()
         embedding = val['embedding']
         embedding=np.fromstring(embedding[1:-1],dtype='float',sep=' ').reshape(512,1)
-        users.append({"link":val["link"],"embedding":embedding,"time":val["time"]})
+        users.append({"link":val["link"],"time":val["time"]})
+        embeddings.append(embedding)
 
-    embeddings = [user["embedding"] for user in users]
-    indexes=np.argwhere(face_distance(embeddings,embedding) < 800)
-    for index in indexes:
-        print(users[index[0]]["embedding"].shape)
-    return render_template("index.html")
+    indexes=get_similar_index(embeddings,embedding)
+    data = [users[index[0]] for index in indexes]
+    json_data = json.dumps(data)
+    json_data = json.loads(json_data)
+    return render_template("index.html",data = data)
 
 def face_distance(face_encodings, face_to_compare):
-    if len(face_encodings) == 0:
-        return np.empty((0))
     face_dist_value = np.linalg.norm(face_encodings - face_to_compare, axis=1)
     return face_dist_value
+
+def get_similar_index(face_encodings,face_to_compare):
+    if len(face_encodings) == 0:
+        return np.empty((0))
+    indexes = np.argwhere(face_distance(face_encodings,face_to_compare) < configs.THRESHOLD )
+    return indexes
 
 @app.route("/getdata")
 def get_data():
@@ -119,7 +110,21 @@ def get_data():
     now = datetime.now()
     timestamp = now.strftime("%d/%m/%Y %H:%M:%S")
     embedding = get_embedding(link)
-    return jsonify(time=timestamp, link=link, embedding =str(embedding))
+    embedding =str(embedding)
+    return jsonify(time=timestamp, link=link, embedding =embedding)
+
+def get_embedding(url):
+    """
+    Encrypt the url and send to azure server
+    """
+    image_handler = Handler(url)
+    url=image_handler.get_url()
+    res=requests.post(FACE_DETECTOR_SERVER+str(url))
+    data=res.json()
+    emb=data["embedding"]
+    embedding=np.fromstring(emb[1:-1],dtype=float,sep=' ')
+    return embedding.reshape((1,512))
+
 
 @app.route("/detect", methods=["POST"])
 def detect():

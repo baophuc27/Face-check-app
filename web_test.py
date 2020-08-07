@@ -97,6 +97,8 @@ def get_data():
     now = datetime.now()
     timestamp = now.strftime("%d/%m/%Y %H:%M:%S")
     embedding = np.asarray(detector.reg_face(frame))
+    print(type(embedding))
+    print(embedding.shape)
     embedding = str(embedding)
     return jsonify(time=timestamp, link=link, embedding=embedding)
 
@@ -116,3 +118,4 @@ def detect():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0")
+vs.stop()

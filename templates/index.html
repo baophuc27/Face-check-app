@@ -14,6 +14,10 @@
         <button type="submit">Checkin</button>
     </form>
     <a href="/getfb">Get Firebase Data</a>
+    {% for user in data %}
+    <img src={{user.link}}>
+    <p>{{user.time}}</p>
+    {% endfor %}
 </body>
 
 </html>
