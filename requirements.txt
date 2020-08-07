@@ -1,0 +1,8 @@
+tensorflow-cpu
+face-recognition
+opencv-python
+numpy
+pyrebase
+imutils
+flask
+cryptography
