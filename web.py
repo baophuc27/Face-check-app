@@ -1,5 +1,5 @@
 from imutils.video import VideoStream
-from flask import render_template, jsonify, request, Flask , Response
+from flask import render_template, jsonify, request, Flask, Response
 import threading
 import json
 import cv2
@@ -32,12 +32,11 @@ def index():
     return render_template("index.html")
 
 
-
 def gen_image():
     global vs, frame
     while True:
         frame = vs.read()
-        # frame = cv2.flip(frame, 1)
+        frame = cv2.flip(frame, 1)
         if frame is not None:
             (flag, encodedImage) = cv2.imencode(".jpg", frame)
 
@@ -50,7 +49,6 @@ def gen_image():
         )
 
 
-
 @app.route("/webcam")
 def webcam():
     return Response(gen_image(), mimetype="multipart/x-mixed-replace; boundary=frame")
@@ -61,7 +59,7 @@ def upload_image(frame):
     path = "user1/" + str(int(time.time()))
     (_, encodedImage) = cv2.imencode(".jpg", frame)
     storage.child(path).put(bytearray(encodedImage))
-    link = storage.child(path).get_url(None)  
+    link = storage.child(path).get_url(None)
     return link
 
 
@@ -70,71 +68,112 @@ def download():
     storage.child("user1/image").download("image.jpg")
     return render_template("index.html")
 
-
-
 def face_distance(face_encodings, face_to_compare):
-    print(face_encodings.shape)
-    print(face_to_compare.shape)
-    face_dist_value = np.linalg.norm(face_encodings - face_to_compare, axis=1)
-    print(face_dist_value)
-    return face_dist_value
+    face_dist_value = []
+    for encoding in face_encodings:
+        face_dist_value.append(
+            np.dot(encoding, face_to_compare)
+            / ((np.linalg.norm(encoding) * np.linalg.norm(face_to_compare)))
+        )
+    return np.asarray(face_dist_value)
 
-def get_similar_index(face_encodings,face_to_compare):
+
+def get_similar_index(face_encodings, face_to_compare):
     if len(face_encodings) == 0:
         return np.empty((0))
-    indexes = np.argwhere(face_distance(face_encodings,face_to_compare) < configs.THRESHOLD )
+    indexes = np.argwhere(
+        face_distance(face_encodings, face_to_compare) > configs.THRESHOLD
+    )
     return indexes
 
+def compare_face():
+    similar_index = []
+    embeddings = []
+    for _ in range(10):
+        r = requests.post(hostname + "getdata")
+        data = r.json()
+        embeddings.append(data["embedding"])
+    similar_index = compare_data(embeddings)
+    unique_index, counts = np.unique(similar_index, return_counts=True)
+    print(unique_index)
+    print(counts)
+    index = unique_index[counts >= 8]
+    return index
 
 @app.route("/detect", methods=["POST"])
 def detect():
-    r = requests.get(hostname + "getdata")
+    start_time = time.time()
+    similar_data=[]
+    r = requests.post(hostname + "getdata")
     data = r.json()
-    database.child("user").push(data)
+    index = compare_face()
+    if len(index) > 0:
+        similar_data = get_similar_data(index)
+        database.child("user").push(data)
+    print("--- %s seconds ---" % (time.time() - start_time))
+    return render_template("index.html", data=similar_data)
 
-    similar_data = get_similar_data()
 
-    return render_template("index.html",data = similar_data)
-
-@app.route("/getdata")
+@app.route("/getdata",methods=['POST'])
 def get_data():
+    image = cv2.imread("./Images/Messi.jpg")
     link = upload_image(frame)
     now = datetime.now()
     timestamp = now.strftime("%d/%m/%Y %H:%M:%S")
     embedding = get_embedding(link)
-    embedding =str(embedding)
-    return jsonify(time=timestamp, link=link, embedding =embedding)
+    embedding = str(embedding)
+    return jsonify(time=timestamp, link=link, embedding=embedding)
+
 
 def get_embedding(url):
     """
     Encrypt the url and send to azure server
     """
     image_handler = Handler(url)
-    url=image_handler.get_url()
-    res=requests.post(FACE_DETECTOR_SERVER+str(url))
-    data=res.json()
-    emb=data["embedding"]
-    embedding=np.fromstring(emb[1:-1],dtype=float,sep=' ')
-    np.save("emb",embedding)
+    url = image_handler.get_url()
+    res = requests.post(FACE_DETECTOR_SERVER + str(url))
+    data = res.json()
+    emb = data["embedding"]
+    embedding = np.fromstring(emb[1:-1], dtype=float, sep=" ")
+    np.save("emb", embedding)
     return embedding.reshape(512)
 
-def get_similar_data():
-    res= database.child('user').get()
-    users=[]
-    embeddings=[]
+
+def compare_data(embedding_compares):
+    res = database.child("user").get()
+    users = []
+    embeddings = []
     for user in res.each():
-        val=user.val()
-        embedding = val['embedding']
-        print(embedding[1:-1])
-        embedding=np.fromstring(embedding[1:-1],dtype='float',sep=' ').reshape(512)
-        users.append({"link":val["link"],"time":val["time"]})
+        val = user.val()
+        embedding = val["embedding"]
+        embedding = np.fromstring(embedding[1:-1], dtype="float", sep=" ").reshape(512)
+        users.append({"link": val["link"], "time": val["time"]})
         embeddings.append(embedding)
-    embeddings=np.asarray(embeddings)
-    indexes=get_similar_index(embeddings[:-1],embedding)
-    # print("distance")
-    # print(face_distance(np.load("emb.npy"),embedding))
-    data = [users[index[0]] for index in indexes]
+    embeddings = np.asarray(embeddings)
+    indexes = []
+    for embedding_compare in embedding_compares:
+        embedding_compare = np.fromstring(
+            embedding_compare[1:-1], dtype="float", sep=" "
+        ).reshape(512)
+        index = get_similar_index(embeddings, embedding_compare)
+        indexes.extend(index)
+    data = [index[0] for index in indexes]
     return data
+
+
+def get_similar_data(index):
+    res = database.child("user").get()
+    users = []
+    embeddings = []
+    for user in res.each():
+        val = user.val()
+        embedding = val["embedding"]
+        embedding = np.fromstring(embedding[1:-1], dtype="float", sep=" ").reshape(512)
+        users.append({"link": val["link"], "time": val["time"]})
+        embeddings.append(embedding)
+    data = [users[i] for i in index]
+    return data
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0")
