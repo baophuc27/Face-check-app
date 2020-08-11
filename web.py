@@ -11,6 +11,7 @@ import numpy as np
 import requests
 from image_handler.handler import Handler
 from configs import configs
+import os
 
 outputFrame = None
 app = Flask(__name__)
@@ -63,10 +64,10 @@ def upload_image(frame):
     return link
 
 
-@app.route("/download", methods=["POST"])
-def download():
-    storage.child("user1/image").download("image.jpg")
-    return render_template("index.html")
+# @app.route("/download", methods=["POST"])
+# def download():
+#     storage.child("user1/image").download("image.jpg")
+#     return render_template("index.html")
 
 def face_distance(face_encodings, face_to_compare):
     face_dist_value = []
@@ -82,42 +83,64 @@ def get_similar_index(face_encodings, face_to_compare):
     if len(face_encodings) == 0:
         return np.empty((0))
     indexes = np.argwhere(
-        face_distance(face_encodings, face_to_compare) > configs.THRESHOLD
+        face_distance(face_encodings, face_to_compare) > configs.COSINE_THRESHOLD
     )
     return indexes
+
+@app.route("/detect", methods=["POST"])
+def detect():
+    start_time = time.time()
+    similar_data=[]
+
+    #Save frames in local
+    capture_faces()
+
+    index = compare_face()
+    url = hostname + "getdata"
+    if len(index) == 0:
+        r = requests.get(url)
+        data = r.json()
+        database.child("user").push(data)
+    similar_data = get_similar_data(index)
+    print("--- %s seconds ---" % (time.time() - start_time))
+    return render_template("index.html", data=similar_data)
+
 
 def compare_face():
     similar_index = []
     embeddings = []
-    for _ in range(10):
-        r = requests.post(hostname + "getdata")
+    url = hostname + "getdata"
+    for i in range(10):
+        params= {"filename":str(i)}
+        r = requests.get(url,params=params)
         data = r.json()
         embeddings.append(data["embedding"])
     similar_index = compare_data(embeddings)
     unique_index, counts = np.unique(similar_index, return_counts=True)
     print(unique_index)
     print(counts)
-    index = unique_index[counts >= 8]
+    index = unique_index[counts >= configs.SIMILAR_THRESHOLD]
     return index
 
-@app.route("/detect", methods=["POST"])
-def detect():
-    start_time = time.time()
-    similar_data=[]
-    r = requests.post(hostname + "getdata")
-    data = r.json()
-    index = compare_face()
-    if len(index) > 0:
-        similar_data = get_similar_data(index)
-        database.child("user").push(data)
-    print("--- %s seconds ---" % (time.time() - start_time))
-    return render_template("index.html", data=similar_data)
 
+def capture_faces():
+    basepath="./faces"
+    for i in range(10):
+        name = os.path.join(basepath,str(i))+".jpg"
+        cv2.imwrite(name,frame[::2,::2])
+        time.sleep(0.2)
 
-@app.route("/getdata",methods=['POST'])
+@app.route("/getdata",methods=['GET'])
 def get_data():
-    image = cv2.imread("./Images/Messi.jpg")
-    link = upload_image(frame)
+    filename=request.args.get('filename')
+    if not filename:
+        filename = '0.jpg'
+    else:
+        filename = filename +".jpg"
+    image_path=os.path.join('./faces',filename)
+    image_path = './Images/muller.jpg'
+    image = cv2.imread(image_path)
+    link = upload_image(image)
     now = datetime.now()
     timestamp = now.strftime("%d/%m/%Y %H:%M:%S")
     embedding = get_embedding(link)
@@ -135,7 +158,6 @@ def get_embedding(url):
     data = res.json()
     emb = data["embedding"]
     embedding = np.fromstring(emb[1:-1], dtype=float, sep=" ")
-    np.save("emb", embedding)
     return embedding.reshape(512)
 
 
@@ -161,7 +183,7 @@ def compare_data(embedding_compares):
     return data
 
 
-def get_similar_data(index):
+def get_similar_data(indexes):
     res = database.child("user").get()
     users = []
     embeddings = []
@@ -171,7 +193,7 @@ def get_similar_data(index):
         embedding = np.fromstring(embedding[1:-1], dtype="float", sep=" ").reshape(512)
         users.append({"link": val["link"], "time": val["time"]})
         embeddings.append(embedding)
-    data = [users[i] for i in index]
+    data = [users[i] for i in indexes]
     return data
 
 
