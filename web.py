@@ -37,7 +37,7 @@ def gen_image():
     global vs, frame
     while True:
         frame = vs.read()
-        frame = cv2.flip(frame, 1)
+        # frame = cv2.flip(frame, 1)
         if frame is not None:
             (flag, encodedImage) = cv2.imencode(".jpg", frame)
 
@@ -71,11 +71,13 @@ def upload_image(frame):
 
 def face_distance(face_encodings, face_to_compare):
     face_dist_value = []
-    for encoding in face_encodings:
-        face_dist_value.append(
-            np.dot(encoding, face_to_compare)
-            / ((np.linalg.norm(encoding) * np.linalg.norm(face_to_compare)))
-        )
+    # for encoding in face_encodings:
+    #     # face_dist_value.append(
+    #     #     np.dot(encoding, face_to_compare)
+    #     #     / ((np.linalg.norm(encoding) * np.linalg.norm(face_to_compare)))
+    #     # )
+    face_dist_value=np.linalg.norm(face_encodings-face_to_compare,axis=1)
+    print(face_dist_value)
     return np.asarray(face_dist_value)
 
 
@@ -83,7 +85,7 @@ def get_similar_index(face_encodings, face_to_compare):
     if len(face_encodings) == 0:
         return np.empty((0))
     indexes = np.argwhere(
-        face_distance(face_encodings, face_to_compare) > configs.COSINE_THRESHOLD
+        face_distance(face_encodings, face_to_compare) < configs.EUCLID_THRESHOLD
     )
     return indexes
 
@@ -91,16 +93,16 @@ def get_similar_index(face_encodings, face_to_compare):
 def detect():
     start_time = time.time()
     similar_data=[]
-
+    index = []
     #Save frames in local
     capture_faces()
 
     index = compare_face()
     url = hostname + "getdata"
-    if len(index) == 0:
-        r = requests.get(url)
-        data = r.json()
-        database.child("user").push(data)
+    # if len(index) == 0:
+    r = requests.get(url)
+    data = r.json()
+    database.child("user").push(data)
     similar_data = get_similar_data(index)
     print("--- %s seconds ---" % (time.time() - start_time))
     return render_template("index.html", data=similar_data)
@@ -110,7 +112,7 @@ def compare_face():
     similar_index = []
     embeddings = []
     url = hostname + "getdata"
-    for i in range(10):
+    for i in range(configs.VOTE):
         params= {"filename":str(i)}
         r = requests.get(url,params=params)
         data = r.json()
@@ -119,16 +121,16 @@ def compare_face():
     unique_index, counts = np.unique(similar_index, return_counts=True)
     print(unique_index)
     print(counts)
-    index = unique_index[counts >= configs.SIMILAR_THRESHOLD]
+    index = unique_index[counts >= configs.VOTE_THRESHOLD]
     return index
 
 
 def capture_faces():
     basepath="./faces"
-    for i in range(10):
+    for i in range(configs.VOTE):
         name = os.path.join(basepath,str(i))+".jpg"
         cv2.imwrite(name,frame[::2,::2])
-        time.sleep(0.2)
+        time.sleep(configs.TIME_PER_VOTE)
 
 @app.route("/getdata",methods=['GET'])
 def get_data():
@@ -138,7 +140,7 @@ def get_data():
     else:
         filename = filename +".jpg"
     image_path=os.path.join('./faces',filename)
-    image_path = './Images/muller.jpg'
+    # image_path = './Images/rooney5.jpg'
     image = cv2.imread(image_path)
     link = upload_image(image)
     now = datetime.now()
